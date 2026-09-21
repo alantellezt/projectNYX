@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control LED Universal</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="app">
+
+    <!-- ===== PANEL DE CONTROLES GLOBALES ===== -->
+    <section class="global-panel" id="globalPanel">
+        <header class="gp-head">
+            <h1>✦ Control LED</h1>
+            <p>Controles globales · afectan a todos los dispositivos conectados al mismo tiempo</p>
+        </header>
+
+        <div class="gp-controls disabled" id="gpControls">
+            <div class="gp-block gp-buttons">
+                <button class="btn btn-primary" id="gOn">Encender todos</button>
+                <button class="btn btn-outline" id="gOff">Apagar todos</button>
+            </div>
+
+            <div class="gp-block">
+                <label class="lbl">Color <span id="gColorVal">#ff0000</span></label>
+                <input type="color" id="gColor" value="#ff0000">
+            </div>
+
+            <div class="gp-block">
+                <label class="lbl">Brillo <span><span id="gBriVal">100</span>%</span></label>
+                <input type="range" id="gBri" min="1" max="100" value="100">
+            </div>
+
+            <div class="gp-block gp-buttons">
+                <button class="btn btn-warm btn-small" id="gWarm">Blanco cálido</button>
+                <button class="btn btn-cold btn-small" id="gCold">Blanco frío</button>
+            </div>
+        </div>
+
+        <footer class="gp-foot">
+            <span id="gpCount" class="gp-count">0 dispositivos conectados</span>
+            <button class="btn btn-primary" id="btnConnect">🔗 Conectar dispositivo</button>
+        </footer>
+    </section>
+
+    <!-- ===== TARJETAS DE DISPOSITIVOS ===== -->
+    <section class="devices" id="devices"></section>
+</main>
+
+<!-- ===== DETALLE INDIVIDUAL DE UN DISPOSITIVO ===== -->
+<div class="modal" id="modal">
+    <div class="modal-card" id="modalBody"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Orden de carga: utilidades → drivers de cada dispositivo → app que los une -->
+<script src="utils.js"></script>
+<script src="device-lednetwf.js"></script>
+<script src="device-hilighting.js"></script>
+<script src="device-elk.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
