@@ -10,6 +10,32 @@
     let modalDev = null;       // dispositivo abierto en el detalle
 
     // ------------------------------------------------------------------
+    // Persistencia: la lista de dispositivos y su último estado se guardan
+    // en localStorage y se restauran al abrir la app.
+    // ------------------------------------------------------------------
+    const STORAGE_KEY = 'led-control:devices:v1';
+    let saveTimer = null;
+
+    function saveDevices() {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+            try {
+                const data = devices.filter(d => d.driver).map(d => ({
+                    id: d.id, name: d.savedName, driver: d.driver.id, state: d.state
+                }));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (e) { /* almacenamiento no disponible */ }
+        }, 250);
+    }
+
+    function loadSaved() {
+        try {
+            const a = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            return Array.isArray(a) ? a.filter(x => x && x.id && LED.drivers.some(d => d.id === x.driver)) : [];
+        } catch (e) { return []; }
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
     const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -29,29 +55,51 @@
     // DISPOSITIVO: conexión + envío + acciones (usa el driver detectado)
     // ==================================================================
     class LEDDevice {
-        constructor(bt) {
-            this.bt = bt;
-            this.id = bt.id;
-            this.driver = null;      // se detecta al conectar
-            this.api = null;         // instancia del driver (create())
-            this.chars = [];         // características escribibles
+        // bt puede ser null: dispositivo recordado que aún no se ha autorizado en esta sesión
+        constructor(bt, saved) {
+            this.bt = null;
+            this.id = saved ? saved.id : bt.id;
+            this.savedName = saved ? (saved.name || '') : '';
+            this.driver = saved ? (LED.drivers.find(d => d.id === saved.driver) || null) : null;
+            this.api = null;
+            this.chars = [];
             this.char = null;
             this.connected = false;
-            this.state = { on: false, r: 255, g: 0, b: 0, brightness: 100, effect: 0, speed: 50 };
+            this.searching = false;   // esperando / conectando automáticamente
+            this.busy = false;
+            this.removed = false;
+            this.failures = 0;
+            this._cancelWait = null;
+            this.state = Object.assign({ on: false, r: 255, g: 0, b: 0, brightness: 100, effect: 0, speed: 50 }, saved && saved.state);
             this.chain = Promise.resolve();
             this.timers = {};
             this.logLines = [];
-
-            bt.addEventListener('gattserverdisconnected', () => {
-                this.connected = false;
-                this.char = null;
-                this.log('Desconectado');
-                if (devices.includes(this)) { refreshCards(); updateGlobal(); }
-                if (modalDev === this) syncModal();
-            });
+            if (bt) this.attach(bt);
         }
 
-        get name() { return this.bt.name || 'Sin nombre'; }
+        get name() { return (this.bt && this.bt.name) || this.savedName || 'Sin nombre'; }
+
+        attach(bt) {
+            this.bt = bt;
+            this.id = bt.id;
+            if (bt.name) this.savedName = bt.name;
+            bt.__ledDev = this;
+            if (!bt.__ledBound) {
+                bt.__ledBound = true;
+                bt.addEventListener('gattserverdisconnected', () => bt.__ledDev && bt.__ledDev._onDrop());
+            }
+        }
+
+        _onDrop() {
+            const was = this.connected;
+            this.connected = false;
+            this.char = null;
+            this.log('Desconectado');
+            if (devices.includes(this)) { refreshCards(); updateGlobal(); }
+            if (modalDev === this) syncModal();
+            // Si se cayó la conexión (apagado, fuera de alcance), reconectar solo
+            if (was && devices.includes(this) && !this.removed) { this.failures = 0; autoConnect(this); }
+        }
 
         log(msg) {
             this.logLines.push(msg);
@@ -59,7 +107,34 @@
             if (modalDev === this) appendModalLog(msg);
         }
 
-        async open() {
+        // Espera a que el dispositivo se anuncie (esté encendido y al alcance).
+        // Resuelve 'seen' | 'cancelled' | 'unsupported'
+        waitForAdvert() {
+            const bt = this.bt;
+            if (typeof bt.watchAdvertisements !== 'function') return Promise.resolve('unsupported');
+            return new Promise(resolve => {
+                const ac = new AbortController();
+                const finish = r => {
+                    if (!this._cancelWait) return;
+                    this._cancelWait = null;
+                    bt.removeEventListener('advertisementreceived', onAdv);
+                    try { ac.abort(); } catch (e) {}
+                    resolve(r);
+                };
+                const onAdv = () => finish('seen');
+                this._cancelWait = () => finish('cancelled');
+                bt.addEventListener('advertisementreceived', onAdv);
+                bt.watchAdvertisements({ signal: ac.signal }).catch(e => {
+                    this.log('watchAdvertisements: ' + e.message);
+                    finish('unsupported');
+                });
+            });
+        }
+        cancelWait() { if (this._cancelWait) this._cancelWait(); }
+
+        // opts.restore = true → reaplica el último estado guardado (reconexión automática)
+        async open(opts = {}) {
+            if (!this.bt) throw new Error('Dispositivo sin autorizar');
             this.log('Conectando…');
             const server = await this.bt.gatt.connect();
 
@@ -108,12 +183,19 @@
             this.connected = true;
             this.log('Protocolo: ' + this.driver.label);
 
-            // Arranque: consulta de estado, encender y aplicar color/brillo actuales
             this.send(this.api.init());
-            this.send(this.api.power(true));
-            this.state.on = true;
-            this.applyColor();
-            if (this.api.brightness) this.send(this.api.brightness(this.state.brightness));
+            if (opts.restore) {
+                // Reaplica lo último que tenía: color y brillo primero, encendido/apagado al final
+                this.applyColor();
+                if (this.api.brightness) this.send(this.api.brightness(this.state.brightness));
+                this.send(this.api.power(this.state.on));
+            } else {
+                this.send(this.api.power(true));
+                this.state.on = true;
+                this.applyColor();
+                if (this.api.brightness) this.send(this.api.brightness(this.state.brightness));
+            }
+            saveDevices();
         }
 
         async write(bytes) {
@@ -143,38 +225,49 @@
         }
 
         // ---- Acciones individuales (las llaman tanto el detalle como los controles globales) ----
-        setPower(on) { this.state.on = on; return this.send(this.api.power(on)); }
+        setPower(on) {
+            if (!this.connected) return;
+            this.state.on = on; saveDevices();
+            return this.send(this.api.power(on));
+        }
 
         applyColor() { const s = this.state; this.send(this.api.color(s.r, s.g, s.b, s.brightness)); }
         setColor(r, g, b) {
-            Object.assign(this.state, { r, g, b });
+            if (!this.connected) return;
+            Object.assign(this.state, { r, g, b }); saveDevices();
             this.throttle('color', () => this.applyColor());
         }
 
         setBrightness(v) {
-            this.state.brightness = v;
+            if (!this.connected) return;
+            this.state.brightness = v; saveDevices();
             this.throttle('bri', () => {
                 if (this.api.brightness) this.send(this.api.brightness(v));
                 else this.applyColor();
             });
         }
 
-        whiteWarm() { this.send(this.api.warm(this.state.brightness)); }
-        whiteCold() { this.send(this.api.cold(this.state.brightness)); }
+        whiteWarm() { if (this.connected) this.send(this.api.warm(this.state.brightness)); }
+        whiteCold() { if (this.connected) this.send(this.api.cold(this.state.brightness)); }
 
         setEffect(n) {
-            this.state.effect = n;
+            if (!this.connected) return;
+            this.state.effect = n; saveDevices();
             if (this.api.effect) this.throttle('fx', () => this.send(this.api.effect(n)), 150);
         }
         setSpeed(v) {
-            this.state.speed = v;
+            if (!this.connected) return;
+            this.state.speed = v; saveDevices();
             if (this.api.speed) this.throttle('spd', () => this.send(this.api.speed(v)), 150);
         }
 
         remove() {
-            try { if (this.bt.gatt.connected) this.bt.gatt.disconnect(); } catch (e) {}
+            this.removed = true;
+            this.cancelWait();
+            try { if (this.bt && this.bt.gatt.connected) this.bt.gatt.disconnect(); } catch (e) {}
             const i = devices.indexOf(this);
             if (i >= 0) devices.splice(i, 1);
+            saveDevices();
         }
     }
 
@@ -221,7 +314,9 @@
             if (!d) continue;
             el.classList.toggle('offline', !d.connected);
             el.querySelector('.dot').classList.toggle('on', d.connected);
-            el.querySelector('.dc-sub').textContent = d.connected ? 'Dispositivo conectado' : 'Desconectado';
+            el.querySelector('.dot').classList.toggle('wait', !d.connected && d.searching);
+            el.querySelector('.dc-sub').textContent = statusText(d);
+            el.querySelector('.reconnect').textContent = reconnectLabel(d);
             el.querySelector('.swatch').style.background = rgbToHex(d.state.r, d.state.g, d.state.b);
             const sw = el.querySelector('input');
             sw.checked = d.state.on;
@@ -229,6 +324,17 @@
             el.querySelector('.switch').classList.toggle('hidden', !d.connected);
             el.querySelector('.reconnect').classList.toggle('hidden', d.connected);
         }
+    }
+
+    function statusText(d) {
+        if (d.connected) return 'Dispositivo conectado';
+        if (d.searching) return 'Buscando…';
+        if (!d.bt) return 'Guardado · falta autorizar';
+        return 'Desconectado';
+    }
+    function reconnectLabel(d) {
+        if (!d.bt) return 'Autorizar';
+        return d.searching ? 'Conectar ahora' : 'Reconectar';
     }
 
     function updateGlobal() {
@@ -240,11 +346,24 @@
     // ==================================================================
     // CONEXIÓN
     // ==================================================================
+    // Mensaje cuando Web Bluetooth no está disponible o está desactivado (Brave lo desactiva de fábrica)
+    async function disabledMessage() {
+        let brave = false;
+        try { brave = !!(navigator.brave && await navigator.brave.isBrave()); } catch (e) {}
+        return brave
+            ? 'Brave trae Web Bluetooth desactivado. Abre brave://flags, busca "Web Bluetooth", ponlo en Enabled y reinicia el navegador.'
+            : 'Este navegador no soporta Web Bluetooth (o está desactivado). Usa Chrome o Edge, con HTTPS o localhost.';
+    }
+
+    // Errores de Bluetooth: ignora "cancelar el selector" pero avisa si está desactivado
+    async function btErrorToast(e, prefix) {
+        if (e && /disabled/i.test(e.message || '')) { toast(await disabledMessage(), 10000); return; }
+        if (e && e.name === 'NotFoundError') return;   // el usuario canceló el selector
+        toast(prefix + e.message, 6000);
+    }
+
     async function connectNew() {
-        if (!navigator.bluetooth) {
-            toast('Este navegador no soporta Web Bluetooth. Usa Chrome/Edge (Android o escritorio) con HTTPS o localhost.', 6000);
-            return;
-        }
+        if (!navigator.bluetooth) { toast(await disabledMessage(), 10000); return; }
         const btn = $('btnConnect');
         btn.disabled = true;
         try {
@@ -253,32 +372,101 @@
                 optionalServices: LED.allServices()
             });
 
-            let dev = devices.find(d => d.id === bt.id);
+            // ¿Ya lo conocemos? (mismo id, o uno guardado sin autorizar con el mismo nombre)
+            let dev = devices.find(d => d.id === bt.id)
+                   || devices.find(d => !d.bt && d.savedName && d.savedName === bt.name);
             if (dev && dev.connected) { toast('Ese dispositivo ya está conectado'); return; }
             const isNew = !dev;
             if (isNew) dev = new LEDDevice(bt);
+            else { dev.cancelWait(); dev.attach(bt); }
 
             btn.textContent = 'Conectando…';
-            await dev.open();
+            await dev.open({ restore: !isNew });
             if (isNew) devices.push(dev);
             renderDevices();
+            saveDevices();
             toast('Conectado: ' + dev.name + ' (' + dev.driver.badge + ')');
         } catch (e) {
-            if (e.name !== 'NotFoundError') toast('Error al conectar: ' + e.message, 6000);
+            await btErrorToast(e, 'Error al conectar: ');
         } finally {
             btn.disabled = false;
             btn.textContent = '🔗 Conectar dispositivo';
         }
     }
 
+    // Dispositivo recordado pero sin permiso en esta sesión: hay que elegirlo una vez en el selector
+    async function pairSaved(dev) {
+        const base = { optionalServices: LED.allServices() };
+        const bt = await navigator.bluetooth.requestDevice(
+            dev.savedName ? { ...base, filters: [{ name: dev.savedName }] } : { ...base, acceptAllDevices: true });
+        dev.attach(bt);
+    }
+
     async function reconnect(dev) {
         try {
-            await dev.open();
+            dev.cancelWait();
+            if (!dev.bt) {
+                if (!navigator.bluetooth) { toast(await disabledMessage(), 10000); return; }
+                await pairSaved(dev);
+            }
+            dev.searching = true; refreshCards(); syncModal();
+            await dev.open({ restore: true });
+            dev.failures = 0;
             toast('Reconectado: ' + dev.name);
         } catch (e) {
-            toast('No se pudo reconectar: ' + e.message, 6000);
+            await btErrorToast(e, 'No se pudo reconectar: ');
+        } finally {
+            dev.searching = false;
+            refreshCards(); updateGlobal(); syncModal();
         }
-        refreshCards(); updateGlobal(); syncModal();
+    }
+
+    // Reconexión automática: espera a que el dispositivo se anuncie y se conecta solo
+    async function autoConnect(dev) {
+        if (dev.busy || dev.connected || !dev.bt || dev.removed) return;
+        dev.busy = true; dev.searching = true;
+        refreshCards(); syncModal();
+        let retry = false;
+        try {
+            const r = await dev.waitForAdvert();
+            if (r === 'cancelled') return;
+            await dev.open({ restore: true });
+            dev.failures = 0;
+            toast('Conectado: ' + dev.name);
+        } catch (e) {
+            dev.failures++;
+            dev.log('✗ Auto-conexión: ' + e.message);
+            retry = dev.failures < 3;
+        } finally {
+            dev.busy = false; dev.searching = false;
+            refreshCards(); updateGlobal(); syncModal();
+        }
+        if (retry && !dev.connected && !dev.removed && devices.includes(dev)) setTimeout(() => autoConnect(dev), 2500);
+    }
+
+    // Al abrir la app: recupera la lista guardada e intenta reconectar los que ya tienen permiso
+    async function restoreDevices() {
+        const saved = loadSaved();
+        if (!saved.length) return;
+        saved.forEach(s => devices.push(new LEDDevice(null, s)));
+        renderDevices();
+
+        if (!(navigator.bluetooth && navigator.bluetooth.getDevices)) {
+            toast(navigator.bluetooth
+                ? 'Este navegador no permite reconectar solo. Pulsa "Autorizar" en cada tarjeta.'
+                : await disabledMessage(), 8000);
+            return;
+        }
+        let perm = [];
+        try { perm = await navigator.bluetooth.getDevices(); } catch (e) { /* sin permisos guardados */ }
+        let n = 0;
+        for (const d of devices) {
+            const bt = perm.find(p => p.id === d.id);
+            if (bt) { d.attach(bt); autoConnect(d); n++; }
+        }
+        refreshCards();
+        if (n) toast('Buscando ' + n + (n === 1 ? ' dispositivo guardado…' : ' dispositivos guardados…'));
+        else toast('Dispositivos recordados: pulsa "Autorizar" para reconectarlos.', 6000);
     }
 
     // ==================================================================
@@ -291,6 +479,8 @@
         refreshCards();
         syncModal();
     }
+
+    LED.mountColorPicker($('gColor'), '#ff0000');
 
     $('btnConnect').addEventListener('click', connectNew);
     $('gOn').addEventListener('click', () => globalDo(d => d.setPower(true)));
@@ -359,7 +549,7 @@
                 </div>
                 <div class="control-group">
                     <label class="lbl">Color <span id="mColorVal"></span></label>
-                    <input type="color" id="mColor">
+                    <div id="mColor"></div>
                 </div>
                 <div class="control-group">
                     <label class="lbl">Brillo <span><span id="mBriVal"></span>%</span></label>
@@ -390,6 +580,7 @@
             </div>`;
 
         const m = id => $(id);
+        LED.mountColorPicker(m('mColor'));
         m('mLog').textContent = dev.logLines.join('\n');
 
         m('mClose').onclick = closeModal;
@@ -446,12 +637,14 @@
         $('mBriVal').textContent = s.brightness;
         if ($('mEff')) { $('mEff').value = s.effect; $('mEffVal').textContent = s.effect; }
         if ($('mSpd')) { $('mSpd').value = s.speed;  $('mSpdVal').textContent = s.speed; }
-        $('mStatus').textContent = d.connected ? '● Conectado' : '● Desconectado';
+        $('mStatus').textContent = d.connected ? '● Conectado' : (d.searching ? '● Buscando…' : '● Desconectado');
         $('mStatus').className = 'status ' + (d.connected ? 'ok' : 'off');
         $('mReconnect').classList.toggle('hidden', d.connected);
+        $('mReconnect').textContent = reconnectLabel(d);
         $('modalBody').classList.toggle('offline', !d.connected);
     }
 
     // ------------------------------------------------------------------
     renderDevices();
+    restoreDevices();
 })();

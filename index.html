@@ -24,7 +24,7 @@
 
             <div class="gp-block">
                 <label class="lbl">Color <span id="gColorVal">#ff0000</span></label>
-                <input type="color" id="gColor" value="#ff0000">
+                <div id="gColor"></div>
             </div>
 
             <div class="gp-block">
@@ -55,8 +55,9 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Orden de carga: utilidades → drivers de cada dispositivo → app que los une -->
+<!-- Orden de carga: utilidades → selector de color → drivers de cada dispositivo → app que los une -->
 <script src="utils.js"></script>
+<script src="color-picker.js"></script>
 <script src="device-lednetwf.js"></script>
 <script src="device-hilighting.js"></script>
 <script src="device-elk.js"></script>

@@ -23,9 +23,13 @@ body { background:var(--bg); color:var(--text); min-height:100vh; padding:20px; 
 .lbl span { color:var(--primary); font-weight:600; }
 input[type="range"] { width:100%; height:6px; -webkit-appearance:none; appearance:none; background:var(--line); border-radius:3px; outline:none; }
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; width:20px; height:20px; border-radius:50%; background:var(--primary); cursor:pointer; box-shadow:0 0 10px rgba(0,212,255,.5); }
-input[type="color"] { -webkit-appearance:none; appearance:none; width:100%; height:46px; border:none; border-radius:12px; cursor:pointer; background:transparent; }
-input[type="color"]::-webkit-color-swatch-wrapper { padding:0; }
-input[type="color"]::-webkit-color-swatch { border:2px solid var(--line); border-radius:12px; }
+/* ---------- Selector de color RGB propio (reemplaza <input type="color">) ---------- */
+.rgbp { position:relative; display:flex; align-items:flex-end; justify-content:center; gap:26px; height:120px; border-radius:16px; border:1px solid rgba(255,255,255,.12); padding:14px 0 10px; touch-action:none; }
+.rgbp-bar { position:relative; width:16px; height:100%; display:flex; flex-direction:column; align-items:center; }
+.rgbp-track { position:relative; width:7px; flex:1; background:rgba(0,0,0,.35); border-radius:4px; cursor:pointer; }
+.rgbp-fill { position:absolute; left:0; right:0; bottom:0; border-radius:4px; background:var(--ch-color); box-shadow:0 0 6px var(--ch-color); pointer-events:none; }
+.rgbp-thumb { position:absolute; left:50%; bottom:0; width:18px; height:18px; border-radius:50%; background:#fff; border:3px solid var(--ch-color); box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%, 50%); pointer-events:none; }
+.rgbp-label { margin-top:8px; font-size:.65rem; font-weight:700; color:var(--ch-color); text-shadow:0 1px 2px rgba(0,0,0,.6); }
 select, input[type="text"] { width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font-size:.82rem; }
 
 /* ---------- Panel global (arriba) ---------- */
@@ -52,6 +56,8 @@ select, input[type="text"] { width:100%; background:var(--bg); color:var(--text)
 .swatch { width:26px; height:26px; border-radius:50%; border:2px solid var(--line); }
 .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--bad); }
 .dot.on { background:var(--ok); box-shadow:0 0 10px var(--ok); }
+.dot.wait { background:#f59e0b; box-shadow:0 0 10px #f59e0b; animation:pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.35; } }
 .badge { font-size:.7rem; background:var(--accent); padding:2px 10px; border-radius:10px; color:#fff; }
 
 /* Switch on/off */
