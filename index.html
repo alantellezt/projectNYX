@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control LED Universal</title>
+    <title>ProjectNYX</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,36 +12,47 @@
     <!-- ===== PANEL DE CONTROLES GLOBALES ===== -->
     <section class="global-panel" id="globalPanel">
         <header class="gp-head">
-            <h1>✦ Control LED</h1>
+            <h1>ProjectNYX</h1>
             <p>Controles globales · afectan a todos los dispositivos conectados al mismo tiempo</p>
         </header>
 
-        <div class="gp-controls disabled" id="gpControls">
-            <div class="gp-block gp-buttons">
-                <button class="btn btn-primary" id="gOn">Encender todos</button>
-                <button class="btn btn-outline" id="gOff">Apagar todos</button>
+        <div class="gp-grid disabled" id="gpControls">
+            <!-- Columna izquierda: encender/apagar arriba, blancos abajo (2×2) -->
+            <div class="gp-cell gp-buttons-grid">
+                <button class="btn btn-primary" id="gOn">Encender</button>
+                <button class="btn btn-outline" id="gOff">Apagar</button>
+                <button class="btn btn-warm" id="gWarm">Cálido</button>
+                <button class="btn btn-cold" id="gCold">Frío</button>
             </div>
 
-            <div class="gp-block">
+            <!-- Columna central: Color arriba, Brillo debajo -->
+            <div class="gp-cell gp-color-block">
                 <label class="lbl">Color <span id="gColorVal">#ff0000</span></label>
                 <div id="gColor"></div>
             </div>
-
-            <div class="gp-block">
+            <div class="gp-cell gp-brightness-block">
                 <label class="lbl">Brillo <span><span id="gBriVal">100</span>%</span></label>
                 <input type="range" id="gBri" min="1" max="100" value="100">
             </div>
 
-            <div class="gp-block gp-buttons">
-                <button class="btn btn-warm btn-small" id="gWarm">Blanco cálido</button>
-                <button class="btn btn-cold btn-small" id="gCold">Blanco frío</button>
+            <!-- Columna derecha: Efecto de pantalla arriba, Conectar debajo -->
+            <div class="gp-cell gp-effect-block">
+                <label class="lbl">Efecto de pantalla</label>
+                <button class="btn btn-outline" id="btnAmbient" style="width:100%">🖥️ Activar</button>
+                <select id="ambientMode">
+                    <option value="average">Promedio</option>
+                    <option value="dominant">Dominante</option>
+                </select>
+                <div class="ambient-row">
+                    <button class="btn btn-outline btn-small toggle-btn active" id="btnMaximize" title="Estira el color al máximo contraste posible (un canal cerca de 0, otro cerca de 255)">Maximizar</button>
+                    <button class="btn btn-outline btn-small toggle-btn" id="btnPip" title="Abre una ventanita flotante siempre encima. Mientras esté abierta, el degradado se vuelve más fino (16ms) porque el navegador deja de frenar la pestaña. Requiere Chrome/Edge en HTTPS o localhost.">📌 Mantener encima</button>
+                </div>
+            </div>
+            <div class="gp-cell gp-connect-block">
+                <span id="gpCount" class="gp-count">0 dispositivos conectados</span>
+                <button class="btn btn-primary" id="btnConnect" style="width:100%">🔗 Conectar dispositivo</button>
             </div>
         </div>
-
-        <footer class="gp-foot">
-            <span id="gpCount" class="gp-count">0 dispositivos conectados</span>
-            <button class="btn btn-primary" id="btnConnect">🔗 Conectar dispositivo</button>
-        </footer>
     </section>
 
     <!-- ===== TARJETAS DE DISPOSITIVOS ===== -->
@@ -55,9 +66,10 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Orden de carga: utilidades → selector de color → drivers de cada dispositivo → app que los une -->
+<!-- Orden de carga: utilidades → selector de color → efecto de pantalla → drivers de cada dispositivo → app que los une -->
 <script src="utils.js"></script>
 <script src="color-picker.js"></script>
+<script src="screen-ambient.js"></script>
 <script src="device-lednetwf.js"></script>
 <script src="device-hilighting.js"></script>
 <script src="device-elk.js"></script>

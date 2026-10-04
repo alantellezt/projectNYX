@@ -73,6 +73,7 @@
             this.state = Object.assign({ on: false, r: 255, g: 0, b: 0, brightness: 100, effect: 0, speed: 50 }, saved && saved.state);
             this.chain = Promise.resolve();
             this.timers = {};
+            this.lastRun = {};
             this.logLines = [];
             if (bt) this.attach(bt);
         }
@@ -219,9 +220,24 @@
             return this.chain;
         }
 
+        // Throttle de verdad (no debounce): ejecuta como máximo una vez cada
+        // `ms`, incluso si lo llaman en ráfaga continua sin pausa — el
+        // efecto de pantalla con el degradado fino depende de esto, porque
+        // lo llama sin parar cada 16ms y necesita que igual salgan comandos
+        // a ritmo regular (un debounce, en cambio, nunca llegaría a disparar).
         throttle(key, fn, ms = 90) {
+            const now = Date.now();
+            const elapsed = now - (this.lastRun[key] || 0);
             clearTimeout(this.timers[key]);
-            this.timers[key] = setTimeout(fn, ms);
+            if (elapsed >= ms) {
+                this.lastRun[key] = now;
+                fn();
+            } else {
+                this.timers[key] = setTimeout(() => {
+                    this.lastRun[key] = Date.now();
+                    fn();
+                }, ms - elapsed);
+            }
         }
 
         // ---- Acciones individuales (las llaman tanto el detalle como los controles globales) ----
@@ -341,6 +357,13 @@
         const n = live().length;
         $('gpCount').textContent = n + (n === 1 ? ' dispositivo conectado' : ' dispositivos conectados');
         $('gpControls').classList.toggle('disabled', n === 0);
+        // Si se desconectan todos los dispositivos, no tiene caso seguir capturando la pantalla
+        if (n === 0 && ambientOn) {
+            LED.screenAmbient.stop();
+            ambientAnimator.reset();
+            setAmbientUI(false);
+            toast('Efecto de pantalla detenido: no quedan dispositivos conectados');
+        }
     }
 
     // ==================================================================
@@ -496,6 +519,151 @@
     });
     $('gWarm').addEventListener('click', () => globalDo(d => d.whiteWarm()));
     $('gCold').addEventListener('click', () => globalDo(d => d.whiteCold()));
+
+    // ==================================================================
+    // EFECTO DE PANTALLA (screen-ambient.js hace la captura y el cálculo
+    // de color; aquí solo se reparte ese color a los dispositivos conectados)
+    // ==================================================================
+    let ambientOn = false;
+
+    // Cada color que llega de la captura es solo un nuevo "objetivo": en
+    // vez de aplicarlo de una vez, se da un paso hacia él (el resto queda
+    // para después), así se ve como un degradado en vez de un salto. Por
+    // defecto no hay temporizador propio: el paso ocurre sobre el mismo
+    // reloj de la captura (cada 200ms), para no sumar un segundo
+    // temporizador que el navegador pueda frenar aparte en segundo plano.
+    // Si se abre la ventana flotante "Mantener encima" (ver más abajo), un
+    // segundo reloj —seguro mientras esa ventana esté abierta— da pasos
+    // mucho más seguidos (cada 16ms) para que el degradado se vea más fino.
+    const ambientAnimator = LED.makeColorAnimator({ alpha: 0.3 });
+    let ambientTarget = null;    // último color pedido por la captura
+    let pipTimer = null;         // reloj rápido de 16ms, solo mientras la ventana flotante está abierta
+
+    function ambientStep() {
+        if (!ambientTarget) return;
+        const [r, g, b] = ambientAnimator.step(ambientTarget.r, ambientTarget.g, ambientTarget.b);
+        const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+        $('gColor').value = hex;          // refleja el color en curso, sin disparar 'input'
+        $('gColorVal').textContent = hex;
+        for (const d of live()) d.setColor(r, g, b);
+        refreshCards();
+    }
+
+    function ambientTick(color) {
+        ambientTarget = color;
+        ambientStep();   // siempre da el paso "de base" al llegar cada captura
+    }
+
+    function startFastStepping() { if (!pipTimer) pipTimer = setInterval(ambientStep, 16); }
+    function stopFastStepping() { clearInterval(pipTimer); pipTimer = null; }
+
+    function setAmbientUI(on) {
+        ambientOn = on;
+        $('btnAmbient').textContent = on ? '⏹ Detener' : '🖥️ Activar';
+        $('btnAmbient').classList.toggle('btn-primary', on);
+        $('btnAmbient').classList.toggle('btn-outline', !on);
+        $('gColor').classList.toggle('rgbp-disabled', on);
+        $('ambientMode').disabled = on;
+        if (on) {
+            if (pipOpen()) startFastStepping();
+        } else {
+            ambientTarget = null;
+            ambientAnimator.reset();   // para que la próxima vez empiece sin arrastrar el color anterior
+            stopFastStepping();
+        }
+    }
+
+    // Opciones vigentes para la captura: modo (promedio/dominante) y si se
+    // estira el color al máximo contraste posible ("Maximizar").
+    function ambientOpts() {
+        return {
+            mode: $('ambientMode').value,
+            maximize: $('btnMaximize').classList.contains('active'),
+            interval: 200,
+            onEnded: () => setAmbientUI(false)   // el usuario detuvo la captura desde el navegador
+        };
+    }
+
+    async function toggleAmbient() {
+        if (ambientOn) { LED.screenAmbient.stop(); setAmbientUI(false); return; }
+        if (!live().length) { toast('No hay dispositivos conectados'); return; }
+        if (!LED.screenAmbient.supported()) {
+            toast('Tu navegador no soporta capturar la pantalla (getDisplayMedia). Usa Chrome o Edge, con HTTPS o localhost.', 7000);
+            return;
+        }
+        const btn = $('btnAmbient');
+        btn.disabled = true;
+        try {
+            await LED.screenAmbient.start(ambientTick, ambientOpts());
+            setAmbientUI(true);
+        } catch (e) {
+            if (e.name !== 'NotAllowedError') toast('No se pudo iniciar la captura: ' + e.message, 6000);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // Si la captura ya está corriendo, reinicia con las opciones actuales
+    // (se usa al cambiar de modo o al activar/desactivar "Maximizar").
+    function restartAmbientIfRunning() {
+        if (!ambientOn) return;
+        LED.screenAmbient.stop();
+        LED.screenAmbient.start(ambientTick, ambientOpts());
+    }
+
+    $('btnAmbient').addEventListener('click', toggleAmbient);
+    $('ambientMode').addEventListener('change', restartAmbientIfRunning);
+    $('btnMaximize').addEventListener('click', () => {
+        $('btnMaximize').classList.toggle('active');
+        restartAmbientIfRunning();
+    });
+
+    // ------------------------------------------------------------------
+    // "Mantener encima": abre una ventanita flotante (Document
+    // Picture-in-Picture) que el navegador mantiene siempre visible. Esto
+    // evita el frenado de temporizadores que aplica a una pestaña en
+    // segundo plano, así que mientras esté abierta es seguro correr el
+    // degradado en su propio reloj rápido (16ms) sin arriesgarse a que se
+    // quede pegado. Requiere Chrome/Edge recientes y un origen seguro
+    // (HTTPS o localhost) — no funciona abriendo el archivo con file://.
+    const pipOpen = () => !!(window.documentPictureInPicture && window.documentPictureInPicture.window);
+
+    function setPipUI(on) {
+        $('btnPip').classList.toggle('active', on);
+        $('btnPip').textContent = on ? '📌 Encima (activo)' : '📌 Mantener encima';
+    }
+
+    async function togglePip() {
+        if (!('documentPictureInPicture' in window)) {
+            toast('Tu navegador no soporta ventanas "siempre encima" (Document Picture-in-Picture). Hace falta Chrome o Edge recientes, en HTTPS o localhost — no funciona abriendo el archivo directo.', 8000);
+            return;
+        }
+        if (pipOpen()) { window.documentPictureInPicture.window.close(); return; }   // el cierre dispara 'pagehide' y limpia solo
+
+        try {
+            // Lo más chico que deja el navegador y sin nada dibujado adentro:
+            // solo necesitamos que la ventana exista y esté visible, no que
+            // muestre contenido. El propio navegador le pone un marco mínimo
+            // (eso no se puede quitar: es justo lo que la mantiene exenta del
+            // frenado de pestañas en segundo plano), pero así molesta lo
+            // menos posible.
+            const pipWin = await window.documentPictureInPicture.requestWindow({ width: 1, height: 1, disallowReturnToOpener: true });
+            pipWin.document.title = 'Efecto activo';
+            pipWin.document.body.style.cssText = 'margin:0;background:transparent;';
+
+            pipWin.addEventListener('pagehide', () => {
+                stopFastStepping();
+                setPipUI(false);
+            });
+
+            setPipUI(true);
+            if (ambientOn) startFastStepping();
+        } catch (e) {
+            if (e.name !== 'NotAllowedError') toast('No se pudo abrir la ventana flotante: ' + e.message, 6000);
+        }
+    }
+
+    $('btnPip').addEventListener('click', togglePip);
 
     // ==================================================================
     // DETALLE INDIVIDUAL (modal) — se construye según lo que soporta el driver

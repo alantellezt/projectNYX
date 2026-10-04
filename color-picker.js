@@ -1,8 +1,8 @@
 /* =====================================================================
    color-picker.js — selector de color RGB propio (sin <input type="color">),
    para que se vea igual en todos los navegadores: una tarjeta cuyo fondo
-   es el color resultante, con tres barras verticales (roja, verde, azul)
-   que se arrastran para ajustar cada canal.
+   es el color resultante, con tres barras horizontales (roja, verde,
+   azul) y un selector alargado que se arrastra para ajustar cada canal.
    ===================================================================== */
 (function () {
     'use strict';
@@ -23,11 +23,11 @@
         el.classList.add('rgbp');
         el.innerHTML = CHANNELS.map(c => `
             <div class="rgbp-bar" data-ch="${c.key}" style="--ch-color:${c.color}">
+                <span class="rgbp-label">${c.key.toUpperCase()}</span>
                 <div class="rgbp-track">
                     <div class="rgbp-fill"></div>
                     <div class="rgbp-thumb"></div>
                 </div>
-                <span class="rgbp-label">${c.key.toUpperCase()}</span>
             </div>`).join('');
 
         const state = { r: 255, g: 0, b: 0 };
@@ -41,14 +41,14 @@
             el.style.background = `rgb(${state.r}, ${state.g}, ${state.b})`;
             for (const c of CHANNELS) {
                 const pct = state[c.key] / 255 * 100;
-                bars[c.key].fill.style.height = pct + '%';
-                bars[c.key].thumb.style.bottom = pct + '%';
+                bars[c.key].fill.style.width = pct + '%';
+                bars[c.key].thumb.style.left = pct + '%';
             }
         }
 
-        function setFromClientY(ch, clientY, track) {
+        function setFromClientX(ch, clientX, track) {
             const rect = track.getBoundingClientRect();
-            const pct = rect.height ? clamp((rect.bottom - clientY) / rect.height, 0, 1) : state[ch] / 255;
+            const pct = rect.width ? clamp((clientX - rect.left) / rect.width, 0, 1) : state[ch] / 255;
             state[ch] = Math.round(pct * 255);
             paint();
             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -57,7 +57,7 @@
         for (const c of CHANNELS) {
             const { track } = bars[c.key];
             let dragging = false;
-            const onMove = e => { if (dragging) setFromClientY(c.key, e.clientY, track); };
+            const onMove = e => { if (dragging) setFromClientX(c.key, e.clientX, track); };
             const onUp = () => {
                 dragging = false;
                 window.removeEventListener('pointermove', onMove);
@@ -66,7 +66,7 @@
             track.addEventListener('pointerdown', e => {
                 dragging = true;
                 if (track.setPointerCapture) { try { track.setPointerCapture(e.pointerId); } catch (err) {} }
-                setFromClientY(c.key, e.clientY, track);
+                setFromClientX(c.key, e.clientX, track);
                 window.addEventListener('pointermove', onMove);
                 window.addEventListener('pointerup', onUp);
                 e.preventDefault();

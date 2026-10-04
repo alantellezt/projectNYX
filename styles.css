@@ -24,12 +24,13 @@ body { background:var(--bg); color:var(--text); min-height:100vh; padding:20px; 
 input[type="range"] { width:100%; height:6px; -webkit-appearance:none; appearance:none; background:var(--line); border-radius:3px; outline:none; }
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; width:20px; height:20px; border-radius:50%; background:var(--primary); cursor:pointer; box-shadow:0 0 10px rgba(0,212,255,.5); }
 /* ---------- Selector de color RGB propio (reemplaza <input type="color">) ---------- */
-.rgbp { position:relative; display:flex; align-items:flex-end; justify-content:center; gap:26px; height:120px; border-radius:16px; border:1px solid rgba(255,255,255,.12); padding:14px 0 10px; touch-action:none; }
-.rgbp-bar { position:relative; width:16px; height:100%; display:flex; flex-direction:column; align-items:center; }
-.rgbp-track { position:relative; width:7px; flex:1; background:rgba(0,0,0,.35); border-radius:4px; cursor:pointer; }
-.rgbp-fill { position:absolute; left:0; right:0; bottom:0; border-radius:4px; background:var(--ch-color); box-shadow:0 0 6px var(--ch-color); pointer-events:none; }
-.rgbp-thumb { position:absolute; left:50%; bottom:0; width:18px; height:18px; border-radius:50%; background:#fff; border:3px solid var(--ch-color); box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%, 50%); pointer-events:none; }
-.rgbp-label { margin-top:8px; font-size:.65rem; font-weight:700; color:var(--ch-color); text-shadow:0 1px 2px rgba(0,0,0,.6); }
+.rgbp { position:relative; display:flex; flex-direction:column; justify-content:center; gap:16px; min-height:120px; border-radius:16px; border:1px solid rgba(255,255,255,.12); padding:18px 20px; touch-action:none; }
+.rgbp-bar { position:relative; display:flex; align-items:center; gap:12px; }
+.rgbp-label { flex:none; width:12px; font-size:.68rem; font-weight:700; color:var(--ch-color); text-shadow:0 1px 2px rgba(0,0,0,.6); }
+.rgbp-track { position:relative; flex:1; height:28px; cursor:pointer; }
+.rgbp-track::before { content:''; position:absolute; top:50%; left:0; right:0; height:3px; transform:translateY(-50%); background:rgba(0,0,0,.35); border-radius:2px; pointer-events:none; }
+.rgbp-fill { position:absolute; top:50%; left:0; transform:translateY(-50%); height:3px; border-radius:2px; background:var(--ch-color); box-shadow:0 0 6px var(--ch-color); pointer-events:none; }
+.rgbp-thumb { position:absolute; top:50%; left:0; width:4px; height:24px; border-radius:3px; background:#fff; border:1px solid var(--ch-color); box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%, -50%); pointer-events:none; }
 select, input[type="text"] { width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font-size:.82rem; }
 
 /* ---------- Panel global (arriba) ---------- */
@@ -37,11 +38,40 @@ select, input[type="text"] { width:100%; background:var(--bg); color:var(--text)
 .gp-head { text-align:center; margin-bottom:20px; }
 .gp-head h1 { font-size:1.5rem; font-weight:600; color:var(--primary); margin-bottom:4px; }
 .gp-head p { font-size:.85rem; color:var(--muted); }
-.gp-controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:20px 26px; align-items:end; transition:opacity .2s; }
-.gp-controls.disabled { opacity:.35; pointer-events:none; }
-.gp-buttons { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-.gp-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:22px; flex-wrap:wrap; }
-.gp-count { font-size:.82rem; color:var(--muted); }
+/* Rejilla del panel: botones | Color+Brillo | Efecto+Conectar, las tres
+   columnas con la misma altura (como en el boceto). */
+.gp-grid {
+    display:grid;
+    grid-template-columns: minmax(150px, 200px) 1fr 1fr;
+    grid-template-rows: 1fr auto;
+    gap:16px;
+    transition:opacity .2s;
+}
+.gp-grid.disabled { opacity:.35; pointer-events:none; }
+.gp-cell { display:flex; flex-direction:column; }
+
+.gp-buttons-grid { grid-column:1; grid-row:1 / span 2; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:10px; }
+.gp-buttons-grid .btn { height:100%; padding:14px; font-size:.95rem; }
+
+.gp-color-block { grid-column:2; grid-row:1; background:rgba(0,0,0,.15); border-radius:20px; padding:16px; justify-content:center; }
+.gp-color-block #gColor { flex:1; }
+.gp-brightness-block { grid-column:2; grid-row:2; justify-content:center; }
+
+.gp-effect-block { grid-column:3; grid-row:1; background:rgba(0,0,0,.15); border-radius:20px; padding:16px; gap:10px; }
+.gp-effect-block select { margin-top:0; }
+.ambient-row { display:flex; flex-wrap:wrap; gap:10px; }
+.ambient-row .toggle-btn { flex:1 1 auto; }
+.toggle-btn { opacity:.5; }
+.toggle-btn.active { opacity:1; background:rgba(0,212,255,.15); border-color:var(--primary); color:var(--primary); }
+
+.gp-connect-block { grid-column:3; grid-row:2; justify-content:center; gap:8px; }
+.rgbp.rgbp-disabled { pointer-events:none; opacity:.45; }
+.gp-count { font-size:.78rem; color:var(--muted); text-align:center; }
+
+@media (max-width:720px) {
+    .gp-grid { grid-template-columns:1fr; grid-template-rows:none; }
+    .gp-buttons-grid, .gp-color-block, .gp-brightness-block, .gp-effect-block, .gp-connect-block { grid-column:1; grid-row:auto; }
+}
 
 /* ---------- Tarjetas de dispositivos ---------- */
 .devices { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:18px; }
