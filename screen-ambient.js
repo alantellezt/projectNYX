@@ -50,7 +50,11 @@
             if (stream) return;
             const mode = opts.mode || 'average';
             const interval = opts.interval || 200;
-            const maximize = opts.maximize !== false;   // por defecto activado
+            // Intensidad de "Maximizar" (0-1). Puede ser un número fijo o una
+            // función que se consulta en cada captura (así la barra se puede
+            // mover en vivo sin reiniciar la captura). Por defecto, 1.
+            const getMaximize = typeof opts.maximize === 'function' ? opts.maximize
+                : () => (opts.maximize === false ? 0 : typeof opts.maximize === 'number' ? opts.maximize : 1);
 
             stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 8 }, audio: false });
             video = document.createElement('video');
@@ -76,8 +80,9 @@
                     // "Maximizar" estira el color al máximo contraste posible (ver
                     // LED.stretchColor en utils.js): el canal más alto queda cerca de
                     // 255 y el más bajo cerca de 0, para que el efecto no se vea
-                    // apagado o grisáceo. Se puede desactivar desde el botón homónimo.
-                    const [r, g, b] = maximize ? LED.stretchColor(c.r, c.g, c.b) : [c.r, c.g, c.b];
+                    // apagado o grisáceo. La barra regula cuánto: 0 = sin estirar,
+                    // 1 = estirado por completo.
+                    const [r, g, b] = LED.stretchColor(c.r, c.g, c.b, getMaximize());
                     onColor({ r, g, b });
                 } catch (e) { /* el primer cuadro puede no estar listo aún; se corrige solo */ }
                 timer = setTimeout(tick, interval);

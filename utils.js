@@ -17,11 +17,16 @@
     // Estira el contraste de un color al máximo posible conservando el matiz:
     // el canal más bajo queda en 0 y el más alto en 255 (o lo más cerca posible).
     // Un gris puro (r===g===b) no tiene matiz que conservar, así que se deja igual.
-    LED.stretchColor = (r, g, b) => {
+    // `amount` (0-1, por defecto 1) permite aplicarlo de forma gradual:
+    // 0 deja el color tal cual y 1 lo estira por completo; en medio mezcla
+    // los dos.
+    LED.stretchColor = (r, g, b, amount = 1) => {
         const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-        if (mx === mn) return [r, g, b];
+        if (mx === mn || amount <= 0) return [r, g, b];
         const k = 255 / (mx - mn);
-        return [Math.round((r - mn) * k), Math.round((g - mn) * k), Math.round((b - mn) * k)];
+        const sr = (r - mn) * k, sg = (g - mn) * k, sb = (b - mn) * k;
+        const a = Math.min(amount, 1);
+        return [Math.round(r + (sr - r) * a), Math.round(g + (sg - g) * a), Math.round(b + (sb - b) * a)];
     };
 
     // Suaviza una serie de colores que van llegando (por ejemplo, del efecto
@@ -38,19 +43,25 @@
     // donde va — nunca hay un salto ni se "hace fila".
     //   opts.alpha: qué fracción de la distancia restante se recorre en
     //     cada llamada (0-1; por defecto 0.5).
+    //   opts.tauMs: en vez de alpha fijo, suavizado "por tiempo": el color
+    //     recorre ~63% de la distancia restante cada `tauMs`, sin importar
+    //     cada cuánto se llame a step(). Hay que pasar dtMs a step().
+    //     Así el degradado se ve igual aunque el reloj vaya a 16 ms o a 200 ms.
     LED.makeColorAnimator = (opts = {}) => {
         const alpha = opts.alpha != null ? opts.alpha : 0.5;
+        const tauMs = opts.tauMs || 0;
         let cur = null;
 
         return {
             // Da un paso hacia (r,g,b) y devuelve el color intermedio
             // resultante como [r,g,b] (ya redondeado). Llamar de nuevo con
             // un color distinto antes de llegar simplemente redirige.
-            step(r, g, b) {
+            step(r, g, b, dtMs) {
                 if (!cur) { cur = { r, g, b }; return [r, g, b]; }   // primer color: sin degradado
-                cur.r += (r - cur.r) * alpha;
-                cur.g += (g - cur.g) * alpha;
-                cur.b += (b - cur.b) * alpha;
+                const a = (tauMs && dtMs > 0) ? 1 - Math.exp(-dtMs / tauMs) : alpha;
+                cur.r += (r - cur.r) * a;
+                cur.g += (g - cur.g) * a;
+                cur.b += (b - cur.b) * a;
                 if (Math.abs(cur.r - r) < 0.5 && Math.abs(cur.g - g) < 0.5 && Math.abs(cur.b - b) < 0.5) {
                     cur = { r, g, b };
                 }

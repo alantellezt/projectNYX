@@ -74,6 +74,9 @@
             this.chain = Promise.resolve();
             this.timers = {};
             this.lastRun = {};
+            this.latest = null;
+            this.latestRunning = false;
+            this.sentFast = false;
             this.logLines = [];
             if (bt) this.attach(bt);
         }
@@ -199,14 +202,19 @@
             saveDevices();
         }
 
-        async write(bytes) {
+        // preferNoResponse: para flujos rápidos (efecto de pantalla). La escritura
+        // sin confirmación no espera la respuesta del dispositivo, así que
+        // admite muchas más actualizaciones por segundo.
+        async write(bytes, preferNoResponse = false) {
             const c = this.char;
             if (!c) { this.log('✗ No hay característica seleccionada'); return; }
             const p = c.properties;
             this.log('→ ' + hex(bytes));
             const attempts = [];
-            if (p.write && c.writeValueWithResponse) attempts.push(() => c.writeValueWithResponse(bytes));
-            if (p.writeWithoutResponse && c.writeValueWithoutResponse) attempts.push(() => c.writeValueWithoutResponse(bytes));
+            const noResp = p.writeWithoutResponse && c.writeValueWithoutResponse ? () => c.writeValueWithoutResponse(bytes) : null;
+            const withResp = p.write && c.writeValueWithResponse ? () => c.writeValueWithResponse(bytes) : null;
+            if (preferNoResponse) { if (noResp) attempts.push(noResp); if (withResp) attempts.push(withResp); }
+            else { if (withResp) attempts.push(withResp); if (noResp) attempts.push(noResp); }
             if (!attempts.length) attempts.push(() => c.writeValue(bytes));
             for (const fn of attempts) {
                 try { await fn(); return; } catch (e) { this.log('  ✗ ' + e.message); }
@@ -218,6 +226,47 @@
             const list = Array.isArray(packets) ? packets : [packets];
             for (const b of list) this.chain = this.chain.then(() => this.write(b)).catch(() => {});
             return this.chain;
+        }
+
+        // Envío "lo más reciente gana", para ráfagas continuas de colores (efecto
+        // de pantalla). A diferencia de send(), no encola cada paquete: si
+        // llegan colores nuevos mientras una escritura sigue en curso, solo
+        // se guarda el último y se manda apenas termine. Así el LED siempre
+        // recibe el color más fresco y no se acumula atraso cuando el
+        // Bluetooth tarda más de lo que tarda en calcularse el degradado.
+        // minGapMs: separación mínima entre escrituras, para no saturar al
+        // dispositivo.
+        sendLatest(packets, minGapMs = 40) {
+            if (!this.connected) return;
+            this.latest = packets;
+            if (this.latestRunning) return;
+            this.latestRunning = true;
+            const pump = () => {
+                const p = this.latest; this.latest = null;
+                if (!p || !this.connected) { this.latestRunning = false; return; }
+                const started = Date.now();
+                const list = Array.isArray(p) ? p : [p];
+                // Pasa por la misma cola que send() para no mezclar escrituras
+                // simultáneas (Web Bluetooth rechaza dos operaciones GATT a la vez).
+                for (const b of list) this.chain = this.chain.then(() => this.write(b, true)).catch(() => {});
+                this.chain.then(() => {
+                    const wait = Math.max(0, minGapMs - (Date.now() - started));
+                    if (wait > 0) setTimeout(pump, wait); else pump();
+                });
+            };
+            pump();
+        }
+
+        // Como setColor(), pero sin el throttle de 90 ms: para el efecto de
+        // pantalla, que ya controla su propio ritmo. Omite el envío si el
+        // color no cambió desde el último que se mandó.
+        setColorFast(r, g, b, minGapMs) {
+            if (!this.connected) return;
+            const s = this.state;
+            if (s.r === r && s.g === g && s.b === b && this.sentFast) return;
+            Object.assign(s, { r, g, b });
+            this.sentFast = true;
+            this.sendLatest(this.api.color(r, g, b, s.brightness), minGapMs);
         }
 
         // Throttle de verdad (no debounce): ejecuta como máximo una vez cada
@@ -535,23 +584,44 @@
     // Si se abre la ventana flotante "Mantener encima" (ver más abajo), un
     // segundo reloj —seguro mientras esa ventana esté abierta— da pasos
     // mucho más seguidos (cada 16ms) para que el degradado se vea más fino.
-    const ambientAnimator = LED.makeColorAnimator({ alpha: 0.3 });
+    // Suavizado por tiempo: el color recorre ~63% de la distancia restante
+    // cada AMBIENT_TAU_MS, sin importar cada cuánto se calcule. Más alto =
+    // degradado más largo y suave (pero llega más tarde al color nuevo).
+    const AMBIENT_TAU_MS = 800;
+    // Separación mínima entre comandos de color a cada dispositivo. Más bajo =
+    // más actualizaciones por segundo (más fino), si el Bluetooth las aguanta.
+    const AMBIENT_MIN_GAP_MS = 80;
+    const ambientAnimator = LED.makeColorAnimator({ tauMs: AMBIENT_TAU_MS });
     let ambientTarget = null;    // último color pedido por la captura
     let pipTimer = null;         // reloj rápido de 16ms, solo mientras la ventana flotante está abierta
+    let ambientLastT = 0;        // para medir cuánto tiempo pasó entre pasos
+    let ambientLastUi = 0;       // última vez que se redibujó la página
+    let ambientLastHex = '';
 
     function ambientStep() {
         if (!ambientTarget) return;
-        const [r, g, b] = ambientAnimator.step(ambientTarget.r, ambientTarget.g, ambientTarget.b);
+        const now = performance.now();
+        const dt = ambientLastT ? Math.min(now - ambientLastT, 250) : 16;
+        ambientLastT = now;
+        const [r, g, b] = ambientAnimator.step(ambientTarget.r, ambientTarget.g, ambientTarget.b, dt);
+        for (const d of live()) d.setColorFast(r, g, b, AMBIENT_MIN_GAP_MS);
+        // La página se redibuja como mucho ~20 veces por segundo y solo si el
+        // color cambió: dibujarla a 60 fps no se nota y le quita fluidez.
         const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
-        $('gColor').value = hex;          // refleja el color en curso, sin disparar 'input'
-        $('gColorVal').textContent = hex;
-        for (const d of live()) d.setColor(r, g, b);
-        refreshCards();
+        if (hex !== ambientLastHex && now - ambientLastUi >= 50) {
+            ambientLastHex = hex; ambientLastUi = now;
+            $('gColor').value = hex;          // refleja el color en curso, sin disparar 'input'
+            $('gColorVal').textContent = hex;
+            refreshCards();
+        }
     }
 
     function ambientTick(color) {
         ambientTarget = color;
-        ambientStep();   // siempre da el paso "de base" al llegar cada captura
+        // Sin reloj rápido, el paso lo da cada captura. Con él, lo da el reloj
+        // (un paso extra aquí, pegado al del reloj, mediría un tiempo casi 0 y
+        // solo gastaría un turno de envío sin avanzar nada).
+        if (!pipTimer) ambientStep();
     }
 
     function startFastStepping() { if (!pipTimer) pipTimer = setInterval(ambientStep, 16); }
@@ -569,16 +639,17 @@
         } else {
             ambientTarget = null;
             ambientAnimator.reset();   // para que la próxima vez empiece sin arrastrar el color anterior
+            ambientLastT = 0; ambientLastHex = '';
             stopFastStepping();
         }
     }
 
-    // Opciones vigentes para la captura: modo (promedio/dominante) y si se
-    // estira el color al máximo contraste posible ("Maximizar").
+    // Opciones vigentes para la captura: modo (promedio/dominante) y cuánto se
+    // estira el color hacia el máximo contraste posible ("Maximizar", 0-100%).
     function ambientOpts() {
         return {
             mode: $('ambientMode').value,
-            maximize: $('btnMaximize').classList.contains('active'),
+            maximize: () => +$('ambientMax').value / 100,   // se lee en cada captura: la barra funciona en vivo
             interval: 200,
             onEnded: () => setAmbientUI(false)   // el usuario detuvo la captura desde el navegador
         };
@@ -613,10 +684,9 @@
 
     $('btnAmbient').addEventListener('click', toggleAmbient);
     $('ambientMode').addEventListener('change', restartAmbientIfRunning);
-    $('btnMaximize').addEventListener('click', () => {
-        $('btnMaximize').classList.toggle('active');
-        restartAmbientIfRunning();
-    });
+    // La barra de Maximizar no necesita reiniciar la captura: el efecto la
+    // consulta en cada cuadro.
+    $('ambientMax').addEventListener('input', e => { $('ambientMaxVal').textContent = e.target.value; });
 
     // ------------------------------------------------------------------
     // "Mantener encima": abre una ventanita flotante (Document
@@ -810,6 +880,54 @@
         $('mReconnect').classList.toggle('hidden', d.connected);
         $('mReconnect').textContent = reconnectLabel(d);
         $('modalBody').classList.toggle('offline', !d.connected);
+    }
+
+    // ==================================================================
+    // EXTENSIÓN: mensajes del popup
+    // Solo existe cuando esta página se abre dentro de la extensión
+    // (chrome.runtime no existe al abrir el archivo suelto). El popup no
+    // se conecta por Bluetooth —se cerraría la conexión al perder el
+    // foco—, así que esta página es la que de verdad controla los
+    // dispositivos y el popup solo le pide cosas por mensaje.
+    // ==================================================================
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+        chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+            if (!msg || !msg.type) return false;
+            switch (msg.type) {
+                case 'ledGetStatus': {
+                    const l = live();
+                    sendResponse({
+                        connected: l.length,
+                        anyOn: l.some(d => d.state.on),
+                        ambientOn,
+                        color: l[0] ? { r: l[0].state.r, g: l[0].state.g, b: l[0].state.b } : null,
+                    });
+                    return false;
+                }
+                case 'ledTogglePower': {
+                    const l = live();
+                    const turnOn = !l.some(d => d.state.on);
+                    l.forEach(d => d.setPower(turnOn));
+                    refreshCards(); syncModal();
+                    sendResponse({ ok: true });
+                    return false;
+                }
+                case 'ledSetColor': {
+                    live().forEach(d => d.setColor(msg.r, msg.g, msg.b));
+                    const hex = '#' + [msg.r, msg.g, msg.b].map(v => v.toString(16).padStart(2, '0')).join('');
+                    $('gColor').value = hex;
+                    $('gColorVal').textContent = hex;
+                    refreshCards();
+                    sendResponse({ ok: true });
+                    return false;
+                }
+                case 'ledToggleAmbient': {
+                    toggleAmbient().then(() => sendResponse({ ok: true }));
+                    return true;   // respuesta asíncrona: mantiene el canal abierto
+                }
+            }
+            return false;
+        });
     }
 
     // ------------------------------------------------------------------

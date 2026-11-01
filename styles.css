@@ -61,6 +61,7 @@ select, input[type="text"] { width:100%; background:var(--bg); color:var(--text)
 .gp-effect-block select { margin-top:0; }
 .ambient-row { display:flex; flex-wrap:wrap; gap:10px; }
 .ambient-row .toggle-btn { flex:1 1 auto; }
+.maximize-row .lbl { margin-bottom:6px; }
 .toggle-btn { opacity:.5; }
 .toggle-btn.active { opacity:1; background:rgba(0,212,255,.15); border-color:var(--primary); color:var(--primary); }
 

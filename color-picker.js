@@ -41,6 +41,7 @@
             el.style.background = `rgb(${state.r}, ${state.g}, ${state.b})`;
             for (const c of CHANNELS) {
                 const pct = state[c.key] / 255 * 100;
+                bars[c.key].fill.style.height = pct + '%';
                 bars[c.key].fill.style.width = pct + '%';
                 bars[c.key].thumb.style.left = pct + '%';
             }

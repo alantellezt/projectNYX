@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ProjectNYX</title>
+    <title>Control LED Universal</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <!-- ===== PANEL DE CONTROLES GLOBALES ===== -->
     <section class="global-panel" id="globalPanel">
         <header class="gp-head">
-            <h1>ProjectNYX</h1>
+            <h1>NYX</h1>
             <p>Controles globales · afectan a todos los dispositivos conectados al mismo tiempo</p>
         </header>
 
@@ -27,7 +27,7 @@
 
             <!-- Columna central: Color arriba, Brillo debajo -->
             <div class="gp-cell gp-color-block">
-                <label class="lbl">Color <span id="gColorVal">#ff0000</span></label>
+                <label class="lbl"><span id="gColorVal"></span></label>
                 <div id="gColor"></div>
             </div>
             <div class="gp-cell gp-brightness-block">
@@ -43,16 +43,19 @@
                     <option value="average">Promedio</option>
                     <option value="dominant">Dominante</option>
                 </select>
+                <div class="maximize-row" title="Estira el color capturado hacia el máximo contraste posible (un canal cerca de 0, otro cerca de 255). 0% = color tal cual; 100% = estirado por completo.">
+                    <label class="lbl">Maximizar <span><span id="ambientMaxVal">100</span>%</span></label>
+                    <input type="range" id="ambientMax" min="0" max="100" value="100">
+                </div>
                 <div class="ambient-row">
-                    <button class="btn btn-outline btn-small toggle-btn active" id="btnMaximize" title="Estira el color al máximo contraste posible (un canal cerca de 0, otro cerca de 255)">Maximizar</button>
                     <button class="btn btn-outline btn-small toggle-btn" id="btnPip" title="Abre una ventanita flotante siempre encima. Mientras esté abierta, el degradado se vuelve más fino (16ms) porque el navegador deja de frenar la pestaña. Requiere Chrome/Edge en HTTPS o localhost.">📌 Mantener encima</button>
                 </div>
             </div>
-            <div class="gp-cell gp-connect-block">
+        </div>
+        <div class="gp-cell gp-connect-block">
                 <span id="gpCount" class="gp-count">0 dispositivos conectados</span>
                 <button class="btn btn-primary" id="btnConnect" style="width:100%">🔗 Conectar dispositivo</button>
             </div>
-        </div>
     </section>
 
     <!-- ===== TARJETAS DE DISPOSITIVOS ===== -->
